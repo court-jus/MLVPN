@@ -91,7 +91,7 @@ enum {
     ENCAP_PROTO_TCP
 };
 
-int mlvpn_config(char *filename, char **tundevname);
+int mlvpn_config(char *filename, char **tundevname, char **tundevip);
 void init_buffers();
 
 uint64_t mlvpn_millis();

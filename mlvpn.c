@@ -416,10 +416,11 @@ int mlvpn_server_accept()
     return accepted;
 }
 
-int mlvpn_tuntap_alloc()
+int mlvpn_tuntap_alloc(char *tundevip)
 {
     struct ifreq ifr;
-    int fd, err;
+    struct sockaddr_in sin;
+    int fd, err, sockfd;
 
     if ( (fd = open("/dev/net/tun", O_RDWR)) < 0 )
     {
@@ -429,7 +430,7 @@ int mlvpn_tuntap_alloc()
     
     memset(&ifr, 0, sizeof(ifr));
     /* We do not want kernel packet info */
-    ifr.ifr_flags = IFF_TUN | IFF_NO_PI; 
+    ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
 
     /* Allocate with specified name, otherwise the kernel
      * will find a name for us.
@@ -442,6 +443,35 @@ int mlvpn_tuntap_alloc()
     {
         _ERROR("Unable to create the device. Kernel returned %d: %s.\n", 
             err, strerror(errno));
+        close(fd);
+        return err;
+    }
+
+    /* Set up interface IP and put it in "up and running" mode */
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    /* set interface addr */
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = inet_addr(tundevip);
+    memcpy(&ifr.ifr_addr, &sin, sizeof(sin));
+
+    if ((err = ioctl(sockfd, SIOCSIFADDR, &ifr)) < 0)
+    {
+        _ERROR("Unable to set IP addr. Kernel returned %d: %s.\n",
+            err, strerror(errno));
+        close(sockfd);
+        close(fd);
+        return err;
+    }
+    /* read interface flags */
+    ioctl(fd, SIOCGIFFLAGS, &ifr);
+    /* set interface flags */
+    ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
+    if ((err = ioctl(sockfd, SIOCSIFFLAGS, &ifr)) < 0)
+    {
+        _ERROR("Unable to set interface flags. Kernel returned %d: %s.\n",
+            err, strerror(errno));
+        close(sockfd);
         close(fd);
         return err;
     }
@@ -913,7 +943,7 @@ void mlvpn_rtun_close(mlvpn_tunnel_t *tun)
     tun->next_keepalive = 0;
 }
 
-int mlvpn_config(char *filename, char **tundevname)
+int mlvpn_config(char *filename, char **tundevname, char **tundevip)
 {
     config_t *config, *work;
     mlvpn_tunnel_t *tmptun;
@@ -967,6 +997,8 @@ int mlvpn_config(char *filename, char **tundevname)
                     "timeout", &default_timeout, 60, NULL, 0);
                 _conf_set_str_from_conf(config, lastSection,
                     "interface_name", tundevname, "mlvpn0", NULL, 0);
+                _conf_set_str_from_conf(config, lastSection,
+                    "interface_ip", tundevip, "192.168.31.1", NULL, 0);
 
                 if (mystr_eq(mode, "server"))
                     server_mode = 1;
@@ -1074,6 +1106,7 @@ int main(int argc, char **argv)
     int maxfd = 0;
     char *cfgfilename = NULL;
     char *tundevname = NULL;
+    char *tundevip = NULL;
     mlvpn_tunnel_t *tmptun;
 
     printf("ML-VPN (c) 2012 Laurent Coustet\n\n");
@@ -1087,14 +1120,14 @@ int main(int argc, char **argv)
     } else {
         cfgfilename = argv[1];
     }
-    mlvpn_config(cfgfilename, &tundevname);
+    mlvpn_config(cfgfilename, &tundevname, &tundevip);
 
     /* tun/tap initialization */
     memset(&tuntap, 0, sizeof(tuntap));
     // TODO : paramétrage de l'interface après son "montage"
-    snprintf(tuntap.devname, IFNAMSIZ, "%s", tundevname);
+    strncpy(tuntap.devname, tundevname, IFNAMSIZ);
     tuntap.mtu = 1500;
-    ret = mlvpn_tuntap_alloc();
+    ret = mlvpn_tuntap_alloc(tundevip);
     if (ret <= 0)
     {
         _ERROR("Unable to create tunnel device.\n");
